@@ -1,0 +1,186 @@
+#!/usr/bin/python
+
+import sys
+import time
+import re
+import configparser
+import dns.query
+import dns.tsig
+import dns.tsigkeyring
+import dns.update
+from phpipamclient import IPAMClient
+
+class ZoneClient(IPAMClient):
+	def __init__(self, host, app, user, passwd, conf):
+		super(ZoneClient, self).__init__(host, app, user, passwd)
+		self.conf = conf
+
+	"""retrieve the key from a bind key file """
+	def getkey(self, filename):
+		r=re.compile('.*secret\s*"([^"]+)".*')
+
+		fp=open(filename, 'r')
+		for line in fp.read().split('\n'):
+			m=r.match(line)
+			if m:
+				return m.group(1)
+		return None
+	
+	"""figure out which part of addr is already specified in zone"""
+	def uniquepart(self, addr, zone):
+		pos=0
+		for i in range(1, len(addr)):
+			if addr[i:]==zone[:len(addr)-i]:
+				if addr[i-1]=='.': i=i-1
+				return addr[0:i]
+		return addr
+
+	def setrecord(self, zone, lhs, type, rhs, server, keyring, ttl=600):
+		update = dns.update.Update(zone, keyring=keyring)
+
+		update.delete(lhs.__str__(), type)
+		print 'Set:',lhs,ttl,type,rhs
+		update.add(lhs.__str__(), ttl, type, rhs.__str__())
+		response=dns.query.tcp(update, server)
+	
+	def addrecord(self, zone, lhs, type, rhs, server, keyring, ttl=600):
+		update = dns.update.Update(zone, keyring=keyring)
+
+		print 'Add:',lhs,ttl,type,rhs
+		update.add(lhs, ttl, type, rhs)
+		response=dns.query.tcp(update, server)
+	
+	def delrecord(self, zone, lhs, type, rhs, server, keyring, ttl=600):
+		update = dns.update.Update(zone, keyring=keyring)
+
+		print 'Del:',lhs,ttl,type
+		update.delete(lhs, type)
+		response=dns.query.tcp(update, server)
+	
+	def nameservers(self, section, zone, server, keyring):
+		r=re.compile("^ns\d*", re.IGNORECASE)
+		for i in conf.options(section):
+			if r.match(i):
+				self.setrecord(zone, None, "NS", conf.get(section, i), server, keyring)
+
+	def mailers(self, section, zone, server, keyring):
+		r=re.compile("^mx\d*", re.IGNORECASE)
+		for i in conf.options(section):
+			if r.match(i):
+				self.setrecord(zone, None, "MX", conf.get(section, i), server, keyring)
+
+	def zoneheader(self, section, zone, server, keyring):
+		#self.nameservers(section, fp)
+		#self.mailers(section, fp)
+		pass
+
+	def miscrecords(self, section, zone, server, keyring):
+		r=re.compile("^txt\d*", re.IGNORECASE)
+		self.delrecord(zone, None, 'TXT', None, server, keyring)
+		for i in conf.options(section):
+			if r.match(i):
+				self.addrecord(zone, None, 'TXT', conf.get(section, i), server, keyring)
+
+	def arecords(self, section, zone, server, keyring):
+		r=re.compile('([^ ]+)\.'+zone+"\.?\s*$")
+
+		a=self.getaddressesbytype(IPAMClient.TYPE_USED)
+		for j in a:
+			names=[ j['hostname'] ]
+			if j['dnames']:
+				names=names + j['dnames'].replace(',', ' ').split(" ")
+			for hostname in names:
+				m=r.match(hostname)
+				if m:
+					hostname=m.group(1)
+					ip=j['ip'].__str__()
+					if ip.find(':')>=0:
+						self.setrecord(zone, hostname, 'AAAA', ip, server, keyring)
+					else:
+						self.setrecord(zone, hostname, 'A', ip, server, keyring)
+
+			# we have a custom field 'cnames' with a list of cnames for the box
+			cnames=j['cnames']
+			if cnames:
+				for cname in j['cnames'].replace(',', ' ').split(" "):
+					m=r.match(cname)
+					if m:
+						cname=m.group(1)
+						self.setrecord(zone, cname, 'CNAME', hostname, server, keyring)
+
+
+	def hosts(self, section, zone, server, keyring):
+		#self.miscrecords(section, zone, server, keyring)
+		self.arecords(section, zone, server, keyring)
+
+	def reverseaddr(self, address, origin=None):
+		if origin:
+			if address[:len(origin)] != origin:
+				raise Exception("Address "+address+" does not belong in "+origin)
+			address = address[len(origin)+1:]
+		l=address.split('.')
+		l.reverse()
+		return '.'.join(l)
+
+	def reverseheader(self, section, zone, server, keyring):
+		#self.nameservers(section, server, keyring)
+		pass
+
+	def ptrrecords(self, section, netid, zone, server, keyring):
+		# first this net
+		a=self.getsubnetaddresses(netid)
+		for j in a:
+			addr=self.uniquepart(self.reverseaddr(j['ip']), zone)
+			hostname=j['hostname'].__str__()
+			if hostname[:-1]!='.': hostname=hostname+'.'
+			print "zone: {0} addr: {1} host: {2}".format(zone, addr, hostname)
+			self.setrecord(zone, addr, 'PTR', hostname, server, keyring)
+
+		# now anything hanging off it
+		d=self.getslavenets(netid)
+		for i in d:
+			self.ptrrecords(section, i['id'], zone, server, keyring)
+
+	def rhosts(self, section, zone, server, keyring):
+		net=self.getsubnetbycidr(section)
+		self.ptrrecords(section, net[0]["id"], zone, server, keyring)
+
+	def process(self, section):
+		keyring=dns.tsigkeyring.from_text({
+			conf.get(section, "keyname"): self.getkey(conf.get(section, "keyfile"))
+		})
+		server=conf.get(section, "nameserver")
+		zone=conf.get(section, "zone")
+
+		if section.find('/')<0:
+			# forward section
+			self.zoneheader(section, zone, server, keyring)
+			self.hosts(section, zone, server, keyring)
+		else:
+			# reverse section
+			self.reverseheader(section, zone, server, keyring)
+			self.rhosts(section, zone, server, keyring)
+
+
+if __name__=="__main__":
+
+	if len(sys.argv)<=1:
+		sys.stderr.write("Usage: "+sys.argv[0]+" <configfile>\n")
+		exit(1)
+
+	conf=configparser.ConfigParser()
+	conf.read(sys.argv[1])
+
+	# TBD CLI overrides of config options
+
+	sysconf=configparser.ConfigParser()
+	sysconf.read("/etc/phpipamtools.cfg")
+	host=sysconf.get("ipam", "host")
+	app=sysconf.get("ipam", "appid")
+	user=sysconf.get("ipam", "user")
+	password=sysconf.get("ipam", "password")
+
+	client = ZoneClient(host, app, user, password, conf)
+	for i in conf.sections():
+		client.process(i)
+
