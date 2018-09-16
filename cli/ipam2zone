@@ -104,8 +104,8 @@ class ZoneClient(IPAMClient):
 		# if there is a default in the config, and we didn't find anything in ipam
 		# write that as a CNAME
 		for i in ("@", "www"):
-			host=conf.get(section, i);
-			if host and i not in hosts:
+			host=conf.get(section, i, fallback=None);
+			if host!=None and i not in hosts:
 				fp.write(i+"\t\tCNAME\t"+host+"\n")
 
 	def reverseaddr(self, address, origin=None):
