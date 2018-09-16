@@ -4,7 +4,33 @@ import sys
 import time
 import re
 import configparser
+import ipaddress
 from phpipamclient import IPAMClient
+
+class IpFilter:
+	def __init__(self, networks):
+		self.networks=[]
+		if networks:
+			items = map(lambda y:y.strip(), networks.split(','))
+			for i in items:
+				if ':' in i:
+					self.networks.append(ipaddress.IPv6Network(unicode(i)))
+				else:
+					self.networks.append(ipaddress.IPv4Network(unicode(i)))
+
+	def match(self, address):
+		try:
+			if ':' in address:
+				addr = ipaddress.IPv6Address(unicode(address))
+			else:
+				addr = ipaddress.IPv4Address(unicode(address))
+		except:
+			return False
+
+		for i in self.networks:
+			if addr in i:
+				return True
+		return False
 
 class ZoneClient(IPAMClient):
 	def __init__(self, host, app, user, passwd, conf):
@@ -65,6 +91,9 @@ class ZoneClient(IPAMClient):
 	def arecords(self, section, fp, domain):
 		fp.write("$TTL\t"+conf.get(section, "ttl")+"\n")
 
+		excl = conf.get(section, "exclude", fallback=None)
+		excludes = IpFilter(excl)
+
 		r=re.compile('([^ ]+)\.'+domain+"\.?\s*$")
 
 		hosts=[]
@@ -78,10 +107,11 @@ class ZoneClient(IPAMClient):
 				if m:
 					hostname=m.group(1)
 					hosts.append(hostname)
-					if j['ip'].find(':')>=0:
-						fp.write(hostname+"\t\t\tAAAA\t"+j['ip']+"\n")
-					else:
-						fp.write(hostname+"\t\t\tA\t"+j['ip']+"\n")
+					if not excludes.match(j['ip']):
+						if ':' in j['ip']:
+							fp.write(hostname+"\t\t\tAAAA\t"+j['ip']+"\n")
+						else:
+							fp.write(hostname+"\t\t\tA\t"+j['ip']+"\n")
 
 			# we have a custom field 'cnames' with a list of cnames for the box
 			cnames=j['cnames']
