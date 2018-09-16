@@ -67,6 +67,7 @@ class ZoneClient(IPAMClient):
 
 		r=re.compile('([^ ]+)\.'+domain+"\.?\s*$")
 
+		hosts=[]
 		a=self.getaddressesbytype(IPAMClient.TYPE_USED)
 		for j in a:
 			names=[ j['hostname'] ]
@@ -76,6 +77,7 @@ class ZoneClient(IPAMClient):
 				m=r.match(hostname)
 				if m:
 					hostname=m.group(1)
+					hosts.append(hostname)
 					if j['ip'].find(':')>=0:
 						fp.write(hostname+"\t\t\tAAAA\t"+j['ip']+"\n")
 					else:
@@ -88,13 +90,23 @@ class ZoneClient(IPAMClient):
 					m=r.match(cname)
 					if m:
 						cname=m.group(1)
+						hosts.append(cname)
 						fp.write(cname+"\t\t\tCNAME\t"+hostname+"."+domain+".\n")
+
+		return hosts
 
 
 	def hosts(self, section, fp):
 		domain=conf.get(section, "domain")
 		self.miscrecords(section, fp, domain)
-		self.arecords(section, fp, domain)
+		hosts=self.arecords(section, fp, domain)
+
+		# if there is a default in the config, and we didn't find anything in ipam
+		# write that as a CNAME
+		for i in ("@", "www"):
+			host=conf.get(section, i);
+			if host and i not in hosts:
+				fp.write(i+"\t\tCNAME\t"+host+"\n")
 
 	def reverseaddr(self, address, origin=None):
 		if origin:
