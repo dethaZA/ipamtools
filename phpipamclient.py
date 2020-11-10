@@ -20,7 +20,8 @@ class IPAMClient(object):
 	TYPE_USED=2
 
 	def login(self):
-		auth={"Authorization": "Basic "+b64encode("{0}:{1}".format(self.user, self.pswd))}
+		cookie = b64encode("{0}:{1}".format(self.user, self.pswd).encode()).decode()
+		auth={"Authorization": "Basic "+cookie}
 		url = "http://" + self.host + quote("/api/" + self.app + "/user/")
 		r, content = self.h.request(url, "POST", headers=auth)
 		try:
