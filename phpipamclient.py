@@ -2,7 +2,7 @@
 
 import sys
 import httplib2
-from urllib import quote,urlencode
+from urllib.parse import quote,urlencode
 from base64 import b64encode
 import json
 
@@ -26,7 +26,7 @@ class IPAMClient(object):
 		try:
 			d = json.loads(content)
 		except Exception:
-			print "JSON fail: ",content
+			print("JSON fail: ",content)
 			raise
 		if (d['success'] == True):
 			self.token = d['data']['token']
@@ -46,13 +46,13 @@ class IPAMClient(object):
 		try:
 			d = json.loads(content)
 		except:
-			print "JSON fail: ",content
+			print("JSON fail: ",content)
 			raise
 		if (d["success"] == True):
 			return d["data"]
 		if (d["code"] == 404):
 			return {}
-		#print json.dumps(d, indent=4)
+		#print(json.dumps(d, indent=4))
 		raise Exception(d["message"])
 
 	def getaddressbyhostname(self, hostname):
@@ -92,7 +92,7 @@ class IPAMClient(object):
 
 	def deladdress(self, ip):
 		a = self.request("addresses/search/"+ip)
-		#print json.dumps(a, indent=4)
+		#print(json.dumps(a, indent=4))
 		if a:
 			if type(a)==list:
 				a = a[0]
